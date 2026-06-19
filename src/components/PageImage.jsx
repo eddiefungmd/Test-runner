@@ -10,8 +10,17 @@ const SCALES = [0.5, 0.75, 1.0, 1.4, 2.0];
 export default function PageImage({ pdfData, pageNum, firstChoiceY = -1 }) {
   const canvasRef    = useRef(null);
   const containerRef = useRef(null);
-  const [scaleIdx, setScaleIdx]   = useState(1); // start at 0.75×
-  const [loading, setLoading]     = useState(true);
+  const [scaleIdx, setScaleIdx] = useState(1);
+  const [loading, setLoading]   = useState(true);
+
+  if (!pdfData) {
+    return (
+      <div className="border border-gray-200 rounded-lg mt-3 p-6 text-center bg-gray-50">
+        <p className="text-sm text-gray-500">PDF not loaded — page view requires the original PDF.</p>
+        <p className="text-xs text-gray-400 mt-1">Start a new test by uploading your PDF again to enable this feature.</p>
+      </div>
+    );
+  }
 
   const scale = SCALES[scaleIdx];
 

@@ -144,7 +144,7 @@ export default function TestScreen({ questions, timerMinutes, pdfData, onFinish 
   };
 
   const sectionLabel = q.sectionNum ? `Section ${q.sectionNum}` : null;
-  const canShowImage = !!pdfData;
+  const canShowImage = true; // always available; PageImage handles missing pdfData
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
