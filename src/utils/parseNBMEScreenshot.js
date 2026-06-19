@@ -48,32 +48,50 @@ function detectProfile(pages) {
     }
   }
 
-  // Large-format threshold: NBME 12 header at ~1040, NBME 14 at ~3970
-  const isLargeFormat = headerY > 2000;
-
-  if (!isLargeFormat) {
-    // NBME 12 defaults
-    return { HEADER_Y_MIN: 1010, FOOTER_Y_MAX: 55, contentLeftX: 0, isLargeFormat: false };
+  // Find the "■ Mark" checkbox Y to accurately place HEADER_Y_MIN between the
+  // header band and question content. The checkbox sits just below the header text
+  // (y ≈ headerY-10 to headerY-60) across all NBME formats.
+  let markY = null;
+  for (const page of pages.slice(0, Math.min(6, pages.length))) {
+    for (const it of page.items) {
+      if (it.str.includes('■') && it.y < headerY - 3 && it.y > headerY - 60) {
+        if (markY === null || it.y < markY) markY = it.y;
+      }
+    }
+    if (markY !== null) break;
   }
 
-  // Large-format: raise FOOTER_Y_MAX above the URL watermark band.
-  // Nav buttons appear just above the watermark and are excluded by the same threshold.
-  let footerY = 200; // conservative minimum
+  // Large-format: NBME 14 has headerY≈3970; small-format: NBME 12≈1040, NBME 13≈521
+  const isLargeFormat = headerY > 2000;
+
+  // FOOTER_Y_MAX: raise above watermark/nav-bar bands as needed
+  let footerY = 55;
   for (const page of pages.slice(0, Math.min(12, pages.length))) {
     for (const it of page.items) {
+      // URL watermarks (NBME 14 Telegram link at y≈2651)
       if (/https?:\/\//i.test(it.str) && it.y > footerY) {
         footerY = Math.max(footerY, it.y + 70);
+      }
+      // "Calculator" is a reliable nav-bar marker; case-sensitive avoids stem false-positives.
+      // Handles NBME 13 exhibit pages where nav bar renders as text at low-Y (y≈117).
+      if (it.str.trim() === 'Calculator' && it.y > footerY) {
+        footerY = Math.max(footerY, it.y + 20);
       }
     }
   }
 
-  const contentLeftX = headerXMin === Infinity ? 2040 : Math.max(0, headerXMin - 20);
+  // contentLeftX only matters for large-format (small-format uses absolute X thresholds)
+  const contentLeftX = isLargeFormat
+    ? (headerXMin === Infinity ? 2040 : Math.max(0, headerXMin - 20))
+    : 0;
 
   return {
-    HEADER_Y_MIN: headerY - 80,
+    // HEADER_Y_MIN: use the "■ Mark" button as the exact boundary when detected,
+    // otherwise fall back to headerY-50 (works for most cases).
+    HEADER_Y_MIN: markY !== null ? markY - 5 : headerY - 50,
     FOOTER_Y_MAX: footerY,
     contentLeftX,
-    isLargeFormat: true,
+    isLargeFormat,
   };
 }
 
@@ -81,11 +99,9 @@ export function isNBMEScreenshot(pages) {
   if (!pages || pages.length < 2) return false;
   let hits = 0;
   for (const page of pages.slice(0, Math.min(12, pages.length))) {
-    // Radio glyphs (NBME 12) or "Item N of N" header at any large Y (NBME 14: y≈3970)
+    // Radio glyphs (NBME 12/13) or "Item N of N" header at any Y
     const hasRadio = page.items.some(it => isRadioGlyph(it, 0));
-    const hasHeader = page.items.some(
-      it => it.y >= 1000 && /\d+\s+[o0]f\s+\d+/i.test(it.str)
-    );
+    const hasHeader = page.items.some(it => /\d+\s+[o0]f\s+\d+/i.test(it.str));
     // Also check combined row text for fragmented headers (NBME 14 page 5 style)
     let hasFragHeader = false;
     if (!hasHeader) {
@@ -119,8 +135,8 @@ function isRadioGlyph(it, contentLeftX) {
     const relX = it.x - contentLeftX;
     return relX >= 40 && relX <= 110;
   }
-  // NBME 12: radio at absolute x≈38-68
-  return it.x >= 38 && it.x <= 68;
+  // Small-format: NBME 12 radio at x≈38-68, NBME 13 radio at x≈27-29
+  return it.x >= 20 && it.x <= 68;
 }
 
 // ── Extract item number from this page ──────────────────────────────────────
@@ -189,6 +205,18 @@ function extractItemNum(headerItems, bodyItems, contentLeftX) {
     if (merged) { bodyItem = parseInt(merged[1]); break; }
   }
 
+  // Fallback: exhibit/two-column pages place "N." in a far-right column (x > qNumMaxX).
+  // Retry without the X constraint.
+  if (!bodyItem && !headerItem) {
+    for (let i = 0; i < Math.min(topBody.length, 80); i++) {
+      const it = topBody[i];
+      const s  = it.str.trim();
+      if (/^\d{1,3}\.$/.test(s)) { bodyItem = parseInt(s); break; }
+      const merged = /^(\d{1,3})\.\s+\S/.exec(s);
+      if (merged) { bodyItem = parseInt(merged[1]); break; }
+    }
+  }
+
   // Body takes priority when it's exactly one ahead of header
   // (overflow page where an image pushed the NEXT question's content into view)
   if (headerItem && bodyItem && bodyItem === headerItem + 1) return bodyItem;
@@ -208,8 +236,8 @@ function extractChoices(bodyItems, contentLeftX) {
   }
 
   // Strategy B: items starting with "A)" "B)" etc.
-  // Require x >= contentLeftX + 50 to avoid false matches in stem
-  const choiceMinX = contentLeftX > 100 ? contentLeftX + 100 : 50;
+  // NBME 13 choice letters at x≈44-47, NBME 12 at x≈85-120, NBME 14 at x≈contentLeftX+115
+  const choiceMinX = contentLeftX > 100 ? contentLeftX + 100 : 30;
   const letterItems = bodyItems
     .filter(it => /^[A-H]\)/.test(it.str.trim()) && it.x >= choiceMinX)
     .sort((a, b) => b.y - a.y);
@@ -307,14 +335,28 @@ export function parseNBMEScreenshot(pages) {
   const { HEADER_Y_MIN, FOOTER_Y_MAX, contentLeftX } = profile;
 
   // X threshold for firstChoiceY / anchor detection (mirrors extractChoices logic)
-  const choiceMinX = contentLeftX > 100 ? contentLeftX + 100 : 50;
+  const choiceMinX = contentLeftX > 100 ? contentLeftX + 100 : 30;
 
   for (const page of pages) {
     const { pageNum, items } = page;
 
-    const headerItems = items.filter(it => it.y >= HEADER_Y_MIN);
+    // Per-page: pages without a visible header bar (no "■ Mark", no "Item N of N",
+    // no NBME branding at the expected Y) may have content starting at the same Y as
+    // the global cutoff — treat their full height as body rather than filtering it out.
+    const pageHasHeader = items.some(it =>
+      it.y >= HEADER_Y_MIN && (
+        it.str.includes('■') ||
+        it.str.trim() === 'Mark' ||
+        /[IlL]tem\s+\d+\s+[o0]f/i.test(it.str) ||
+        /National Board/i.test(it.str) ||
+        /Time Remaining/i.test(it.str)
+      )
+    );
+    const effectiveHeaderY = pageHasHeader ? HEADER_Y_MIN : Infinity;
+
+    const headerItems = items.filter(it => it.y >= effectiveHeaderY);
     const bodyItems   = items.filter(it =>
-      it.y < HEADER_Y_MIN &&
+      it.y < effectiveHeaderY &&
       it.y > FOOTER_Y_MAX &&
       !/https?:\/\//i.test(it.str) // strip watermark URLs
     );
