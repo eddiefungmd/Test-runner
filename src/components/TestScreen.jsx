@@ -144,7 +144,7 @@ export default function TestScreen({ questions, timerMinutes, pdfData, onFinish 
   };
 
   const sectionLabel = q.sectionNum ? `Section ${q.sectionNum}` : null;
-  const canShowImage = q._hasImage && pdfData;
+  const canShowImage = !!pdfData;
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
